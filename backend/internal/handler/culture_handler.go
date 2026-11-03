@@ -79,13 +79,18 @@ func (h *CultureHandler) GetElementBySlug(c *gin.Context) {
 }
 
 // GetKnowledgeGraph godoc
-// GET /api/v1/culture/elements/:id/graph
+// GET /api/v1/culture/elements/:slug/graph
 func (h *CultureHandler) GetKnowledgeGraph(c *gin.Context) {
-	idStr := c.Param("id")
-	elementID, err := uuid.Parse(idStr)
+	param := c.Param("slug")
+	elementID, err := uuid.Parse(param)
 	if err != nil {
-		response.BadRequest(c, "ID budaya tidak valid", err.Error())
-		return
+		// If not UUID, look up element by slug
+		elem, err := h.svc.GetElementBySlug(c.Request.Context(), param)
+		if err != nil {
+			response.NotFound(c, "Elemen budaya tidak ditemukan")
+			return
+		}
+		elementID = elem.ID
 	}
 
 	relations, err := h.svc.GetKnowledgeGraph(c.Request.Context(), elementID)

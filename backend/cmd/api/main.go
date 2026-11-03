@@ -73,7 +73,7 @@ func main() {
 			cultureGroup.GET("/categories/:slug", cultureHandler.GetCategoryBySlug)
 			cultureGroup.GET("/elements", cultureHandler.GetElements)
 			cultureGroup.GET("/elements/:slug", cultureHandler.GetElementBySlug)
-			cultureGroup.GET("/elements/:id/graph", cultureHandler.GetKnowledgeGraph)
+			cultureGroup.GET("/elements/:slug/graph", cultureHandler.GetKnowledgeGraph)
 		}
 
 		destGroup := v1.Group("/destinations")
