@@ -1,20 +1,12 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import Navbar from "@/components/Navbar";
+import Footer from "@/components/Footer";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "BONATURA — Discover Culture, Experience Heritage",
-  description: "Platform terintegrasi pelestarian budaya nusantara, peta destinasi budaya interaktif, dan panduan cerdas AI.",
+  description:
+    "Platform terintegrasi pelestarian budaya nusantara, peta destinasi budaya interaktif, dan panduan cerdas AI.",
 };
 
 export default function RootLayout({
@@ -23,11 +15,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="id"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col bg-amber-50/30 text-stone-900 font-sans">{children}</body>
+    <html lang="id" className="h-full antialiased scroll-smooth">
+      <body className="min-h-full flex flex-col bg-[#FAFAF8] text-stone-800 font-sans selection:bg-amber-200 selection:text-amber-900">
+        <Navbar />
+        <main className="flex-1">{children}</main>
+        <Footer />
+      </body>
     </html>
   );
 }
