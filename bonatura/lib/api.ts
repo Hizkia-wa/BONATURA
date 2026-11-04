@@ -686,3 +686,75 @@ function mapLocalDestinationToUnified(d: TobaDestinationDetail): UnifiedDestinat
   };
 }
 
+// ==========================================
+// FEATURE 5: PERSONALIZED JOURNEY API
+// ==========================================
+
+export interface BackendExportJourneyResponse {
+  title: string;
+  formatted_text: string;
+  whatsapp_url: string;
+  download_file_name: string;
+  download_content: string;
+}
+
+export async function exportJourneyViaBackend(payload: {
+  title: string;
+  duration_days: number;
+  selected_interests: string[];
+  region_focus: string;
+  pace: string;
+  estimated_total_cost: number;
+  itinerary_days: any[];
+  target_phone_number?: string;
+}): Promise<{
+  data: BackendExportJourneyResponse | null;
+  isFromBackend: boolean;
+}> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
+    const res = await fetch(`${API_BASE_URL}/journeys/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify(payload),
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) throw new Error(`Status ${res.status}`);
+    const json: ApiResponse<BackendExportJourneyResponse> = await res.json();
+    if (json.success && json.data) {
+      return { data: json.data, isFromBackend: true };
+    }
+  } catch (err) {
+    console.warn("Backend journey export unavailable, using client generator:", err);
+  }
+  return { data: null, isFromBackend: false };
+}
+
+export async function saveJourneyViaBackend(payload: any): Promise<{
+  data: any | null;
+  isFromBackend: boolean;
+}> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
+    const res = await fetch(`${API_BASE_URL}/journeys`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify(payload),
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) throw new Error(`Status ${res.status}`);
+    const json = await res.json();
+    if (json.success && json.data) {
+      return { data: json.data, isFromBackend: true };
+    }
+  } catch (err) {
+    console.warn("Backend save journey unavailable, using local storage:", err);
+  }
+  return { data: null, isFromBackend: false };
+}
+
+

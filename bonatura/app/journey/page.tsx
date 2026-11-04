@@ -41,12 +41,15 @@ import {
   X,
   MessageCircle,
   DollarSign,
-  AlertCircle,
-  Award,
+  Download,
+  FileText,
+  Send,
 } from "lucide-react";
 import {
   getDestinations,
   UnifiedDestination,
+  exportJourneyViaBackend,
+  saveJourneyViaBackend,
 } from "@/lib/api";
 import { TOBA_MAP_DESTINATIONS, TobaDestinationDetail } from "@/lib/data";
 import BackendStatusBadge from "@/components/BackendStatusBadge";
@@ -192,10 +195,169 @@ const PACE_OPTIONS = [
   { id: "intensive", label: "Intensif", stopsPerDay: 4, desc: "4 destinasi / hari, eksplorasi maksimal" },
 ];
 
-export default function DynamicPersonalizedJourneyPage() {
-  // ==========================================
-  // STATE MANAGEMENT
-  // ==========================================
+// Synchronous default destination builder to ensure zero lag & immediate interactivity
+function getSynchronousDestinations(): UnifiedDestination[] {
+  return TOBA_MAP_DESTINATIONS.map((d) => ({
+    id: d.id,
+    name: d.name,
+    slug: d.id,
+    category: d.category,
+    area: d.area,
+    address: d.area,
+    coordinates: d.coordinates,
+    latitude: d.lat,
+    longitude: d.lng,
+    imageUrl: d.imageUrl,
+    description: d.description,
+    fullStory: d.fullStory,
+    visitingHours: d.visitingHours,
+    entryFee: d.entryFee,
+    ticketPrice: parseInt(d.entryFee.replace(/[^0-9]/g, "")) || 15000,
+    culturalElements: [],
+    activities: d.activities.map((act, i) => ({
+      id: `${d.id}-act-${i}`,
+      name: act,
+      description: act,
+      durationMinutes: 90,
+      price: 25000,
+    })),
+    isFromBackend: false,
+  }));
+}
+
+// Synchronous Itinerary Generator Function
+function buildItineraryArray(
+  durationDays: number,
+  pace: "relaxed" | "standard" | "intensive",
+  pool: UnifiedDestination[],
+  interests: string[],
+  region: string
+): ItineraryDay[] {
+  if (!pool || pool.length === 0) return [];
+
+  const paceConfig = PACE_OPTIONS.find((p) => p.id === pace) || PACE_OPTIONS[1];
+  const stopsCountPerDay = paceConfig.stopsPerDay;
+
+  // Filter & score pool based on interests
+  const activeKeywords = interests.flatMap((intId) => {
+    const item = CULTURAL_INTERESTS.find((i) => i.id === intId);
+    return item ? item.recommendedKeywords : [];
+  });
+
+  const sortedPool = [...pool].sort((a, b) => {
+    let scoreA = 0;
+    let scoreB = 0;
+    const textA = `${a.name} ${a.description} ${a.area} ${a.category}`.toLowerCase();
+    const textB = `${b.name} ${b.description} ${b.area} ${b.category}`.toLowerCase();
+
+    activeKeywords.forEach((kw) => {
+      if (textA.includes(kw.toLowerCase())) scoreA += 2;
+      if (textB.includes(kw.toLowerCase())) scoreB += 2;
+    });
+
+    if (region !== "Semua") {
+      if (a.area.toLowerCase().includes(region.toLowerCase())) scoreA += 5;
+      if (b.area.toLowerCase().includes(region.toLowerCase())) scoreB += 5;
+    }
+
+    return scoreB - scoreA;
+  });
+
+  const timeSlotTemplates = [
+    { slot: "08:30 – 11:00", period: "Pagi" as const },
+    { slot: "11:30 – 14:00", period: "Siang" as const },
+    { slot: "14:30 – 17:00", period: "Sore" as const },
+    { slot: "18:00 – 20:30", period: "Malam" as const },
+  ];
+
+  const days: ItineraryDay[] = [];
+  let poolIdx = 0;
+
+  for (let day = 1; day <= durationDays; day++) {
+    const dayStops: ItineraryStop[] = [];
+
+    for (let s = 0; s < stopsCountPerDay; s++) {
+      const dest = sortedPool[poolIdx % sortedPool.length];
+      poolIdx++;
+
+      const availableActs = (dest.activities && dest.activities.length > 0)
+        ? dest.activities.map((a, aIdx) => ({
+            id: a.id || `${dest.id}-act-${aIdx}`,
+            title: a.name || `Aktivitas di ${dest.name}`,
+            description: a.description || dest.description,
+            durationMinutes: a.durationMinutes || 90,
+            priceAmount: a.price || 20000,
+            priceFormatted: a.price ? `Rp ${a.price.toLocaleString("id-ID")}` : "Donasi Adat Sukarela",
+          }))
+        : [
+            {
+              id: `${dest.id}-default-1`,
+              title: `Tur Eksplorasi Warisan di ${dest.name}`,
+              description: dest.description,
+              durationMinutes: 90,
+              priceAmount: dest.ticketPrice || 15000,
+              priceFormatted: dest.entryFee || "Rp 15.000 / orang",
+            },
+          ];
+
+      const act = availableActs[s % availableActs.length];
+      const slot = timeSlotTemplates[s % timeSlotTemplates.length];
+
+      let etiquette = "Kenakan pakaian sopan saat berada di area makam/huta dan sapa warga setempat dengan 'Horas!'";
+      if (dest.category.toLowerCase().includes("village") || dest.category.toLowerCase().includes("tradisional")) {
+        etiquette = "Minta izin sebelum memasuki halaman Rumah Bolon warga dan kenakan selendang ulos jika disediakan tetua.";
+      } else if (dest.category.toLowerCase().includes("heritage") || dest.category.toLowerCase().includes("historical")) {
+        etiquette = "Dilarang memanjat atau merusak formasi batu cagar budaya megalitikum.";
+      } else if (dest.category.toLowerCase().includes("culinary")) {
+        etiquette = "Bagi yang memiliki sensitivitas rasa pedas/kebas, tanyakan kadar bumbu rempah andaliman.";
+      }
+
+      dayStops.push({
+        id: `stop-${day}-${s + 1}`,
+        stepNumber: s + 1,
+        timeSlot: slot.slot,
+        timePeriod: slot.period,
+        destinationName: dest.name,
+        destinationId: dest.id,
+        destinationSlug: dest.slug,
+        area: dest.area,
+        subRegion: dest.area.split(",")[0] || "Danau Toba",
+        activityTitle: act.title,
+        activityDescription: act.description,
+        culturalPillar: dest.category,
+        durationMinutes: act.durationMinutes,
+        durationText: `${act.durationMinutes} Menit`,
+        estimatedCost: act.priceFormatted,
+        costAmount: act.priceAmount,
+        culturalEtiquette: etiquette,
+        transferNote: s < stopsCountPerDay - 1 ? "± 20–30 menit perjalanan darat" : undefined,
+        imageUrl: dest.imageUrl,
+        availableActivities: availableActs,
+      });
+    }
+
+    let dayTheme = `Hari ${day}: Penjelajahan Warisan & Interaksi Tradisi Batak`;
+    if (day === 1) dayTheme = `Hari 1: Peradaban Kuno, Arsitektur Huta & Napak Tilas Megalitik`;
+    if (day === 2) dayTheme = `Hari 2: Kriya Tenun Ulos, Simfoni Gondang & Kuliner Resep Leluhur`;
+    if (day === 3) dayTheme = `Hari 3: Lanskap Kaldera Vulkanik, Ziarah Spiritual & Puncak Geopark`;
+    if (day >= 4) dayTheme = `Hari ${day}: Pendalaman Budaya Komunitas & Lanskap Tepi Danau`;
+
+    days.push({
+      dayNumber: day,
+      themeTitle: dayTheme,
+      daySummary: `Rangkaian ${dayStops.length} titik persinggahan budaya pilihan dengan fokus pada interaksi otentik dan pelestarian nilai tradisi.`,
+      stops: dayStops,
+    });
+  }
+
+  return days;
+}
+
+export default function PersonalizedJourneyPage() {
+  // Synchronous initial data pool
+  const initialPool = useMemo(() => getSynchronousDestinations(), []);
+
+  // State
   const [selectedInterests, setSelectedInterests] = useState<string[]>([
     "ulos-tenun",
     "arsitektur-bolon",
@@ -204,86 +366,58 @@ export default function DynamicPersonalizedJourneyPage() {
   const [durationDays, setDurationDays] = useState<number>(2);
   const [regionFocus, setRegionFocus] = useState<string>("Semua");
   const [travelPace, setTravelPace] = useState<"relaxed" | "standard" | "intensive">("standard");
-  const [customJourneyTitle, setCustomJourneyTitle] = useState<string>("");
+  const [customJourneyTitle, setCustomJourneyTitle] = useState<string>(
+    "Jelajah Tenun Ulos & Cagar Megalitikum Samosir (2 Hari)"
+  );
 
-  // Backend Data Pool
-  const [destinationPool, setDestinationPool] = useState<UnifiedDestination[]>([]);
+  // Destination Pool (initialized synchronously so there is zero freeze)
+  const [destinationPool, setDestinationPool] = useState<UnifiedDestination[]>(initialPool);
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
-  const [isLoadingDestinations, setIsLoadingDestinations] = useState<boolean>(true);
 
-  // Dynamic Interactive Itinerary Days
-  const [itineraryDays, setItineraryDays] = useState<ItineraryDay[]>([]);
+  // Dynamic Interactive Itinerary Days (initialized synchronously)
+  const [itineraryDays, setItineraryDays] = useState<ItineraryDay[]>(() =>
+    buildItineraryArray(2, "standard", initialPool, [
+      "ulos-tenun",
+      "arsitektur-bolon",
+      "megalitikum-sejarah",
+    ], "Semua")
+  );
 
   // Modals & Drawers
   const [selectedPreviewDest, setSelectedPreviewDest] = useState<UnifiedDestination | null>(null);
   const [addingStopToDayIndex, setAddingStopToDayIndex] = useState<number | null>(null);
 
-  // Storage & Feedback states
+  // Storage & Feedback
   const [savedJourneys, setSavedJourneys] = useState<SavedJourney[]>([]);
-  const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
+  const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null);
   const [copiedShareNotice, setCopiedShareNotice] = useState(false);
   const [activeTab, setActiveTab] = useState<"builder" | "saved">("builder");
+  const [isActionLoading, setIsActionLoading] = useState(false);
+  const [isDraftLoaded, setIsDraftLoaded] = useState(false);
 
   // ==========================================
-  // 1. DATA INITIALIZATION & BACKEND SYNC
+  // BACKGROUND BACKEND DATA SYNC
   // ==========================================
-  const fetchDestinationData = useCallback(async () => {
-    setIsLoadingDestinations(true);
+  const fetchBackendData = useCallback(async () => {
     try {
       const res = await getDestinations({ perPage: 50 });
       if (res && res.destinations && res.destinations.length > 0) {
         setDestinationPool(res.destinations);
         setIsBackendConnected(res.isFromBackend);
-      } else {
-        // Fallback to local
-        fallbackToLocalData();
       }
-    } catch (err) {
-      console.warn("Failed fetching destinations from backend, using local data:", err);
-      fallbackToLocalData();
-    } finally {
-      setIsLoadingDestinations(false);
+    } catch {
+      // Keep using current pool
     }
   }, []);
 
-  const fallbackToLocalData = () => {
-    const mapped: UnifiedDestination[] = TOBA_MAP_DESTINATIONS.map((d) => ({
-      id: d.id,
-      name: d.name,
-      slug: d.id,
-      category: d.category,
-      area: d.area,
-      address: d.area,
-      coordinates: d.coordinates,
-      latitude: d.lat,
-      longitude: d.lng,
-      imageUrl: d.imageUrl,
-      description: d.description,
-      fullStory: d.fullStory,
-      visitingHours: d.visitingHours,
-      entryFee: d.entryFee,
-      ticketPrice: parseInt(d.entryFee.replace(/[^0-9]/g, "")) || 10000,
-      culturalElements: [],
-      activities: d.activities.map((act, i) => ({
-        id: `${d.id}-act-${i}`,
-        name: act,
-        description: act,
-        durationMinutes: 90,
-        price: 25000,
-      })),
-      isFromBackend: false,
-    }));
-    setDestinationPool(mapped);
-    setIsBackendConnected(false);
-  };
-
   useEffect(() => {
-    fetchDestinationData();
-  }, [fetchDestinationData]);
+    fetchBackendData();
+  }, [fetchBackendData]);
 
-  // Load saved journeys from localStorage
+  // Load saved journeys & active working draft from localStorage on mount
   useEffect(() => {
     try {
+      // 1. Saved journeys list
       const stored = localStorage.getItem("bonatura_saved_journeys");
       if (stored) {
         const parsed = JSON.parse(stored);
@@ -291,208 +425,135 @@ export default function DynamicPersonalizedJourneyPage() {
           setSavedJourneys(parsed);
         }
       }
-    } catch (e) {
-      console.warn("Could not read localStorage for saved journeys:", e);
+
+      // 2. Active working draft (prevents reset when switching features)
+      const activeDraftJson = localStorage.getItem("bonatura_active_journey_draft");
+      if (activeDraftJson) {
+        const draft = JSON.parse(activeDraftJson);
+        if (draft && Array.isArray(draft.itineraryDays) && draft.itineraryDays.length > 0) {
+          if (Array.isArray(draft.selectedInterests) && draft.selectedInterests.length > 0) {
+            setSelectedInterests(draft.selectedInterests);
+          }
+          if (typeof draft.durationDays === "number") {
+            setDurationDays(draft.durationDays);
+          }
+          if (draft.regionFocus) {
+            setRegionFocus(draft.regionFocus);
+          }
+          if (draft.travelPace) {
+            setTravelPace(draft.travelPace);
+          }
+          if (draft.customJourneyTitle) {
+            setCustomJourneyTitle(draft.customJourneyTitle);
+          }
+          setItineraryDays(draft.itineraryDays);
+        }
+      }
+    } catch (err) {
+      console.warn("Could not load journey draft from storage:", err);
+    } finally {
+      setIsDraftLoaded(true);
     }
   }, []);
 
-  // ==========================================
-  // 2. DYNAMIC SCORING ENGINE
-  // ==========================================
-  const scoredDestinations = useMemo(() => {
-    if (!destinationPool || destinationPool.length === 0) return [];
+  // Auto-persist active working draft to localStorage so navigation doesn't reset user selections
+  useEffect(() => {
+    if (!isDraftLoaded) return;
+    try {
+      const draft = {
+        selectedInterests,
+        durationDays,
+        regionFocus,
+        travelPace,
+        customJourneyTitle,
+        itineraryDays,
+        lastUpdated: Date.now(),
+      };
+      localStorage.setItem("bonatura_active_journey_draft", JSON.stringify(draft));
+    } catch (err) {
+      console.warn("Failed saving active draft:", err);
+    }
+  }, [
+    isDraftLoaded,
+    selectedInterests,
+    durationDays,
+    regionFocus,
+    travelPace,
+    customJourneyTitle,
+    itineraryDays,
+  ]);
 
+  // Scored destinations for recommendation pool
+  const scoredDestinations = useMemo(() => {
     const activeKeywords = selectedInterests.flatMap((intId) => {
       const interest = CULTURAL_INTERESTS.find((i) => i.id === intId);
       return interest ? interest.recommendedKeywords : [];
     });
 
-    const list = destinationPool.map((dest) => {
-      let score = 0;
-      const haystack = `${dest.name} ${dest.description} ${dest.area} ${dest.category} ${(dest.activities || []).map((a) => a.name).join(" ")}`.toLowerCase();
+    return [...destinationPool].sort((a, b) => {
+      let scoreA = 0;
+      let scoreB = 0;
+      const textA = `${a.name} ${a.description} ${a.area} ${a.category}`.toLowerCase();
+      const textB = `${b.name} ${b.description} ${b.area} ${b.category}`.toLowerCase();
 
       activeKeywords.forEach((kw) => {
-        if (haystack.includes(kw.toLowerCase())) {
-          score += 2;
-        }
+        if (textA.includes(kw.toLowerCase())) scoreA += 2;
+        if (textB.includes(kw.toLowerCase())) scoreB += 2;
       });
 
-      // Region match boost
       if (regionFocus !== "Semua") {
-        if (dest.area.toLowerCase().includes(regionFocus.toLowerCase())) {
-          score += 5;
-        } else {
-          score -= 1;
-        }
+        if (a.area.toLowerCase().includes(regionFocus.toLowerCase())) scoreA += 5;
+        if (b.area.toLowerCase().includes(regionFocus.toLowerCase())) scoreB += 5;
       }
 
-      // Check which specific interests matched
-      const matchedInterestNames = selectedInterests
-        .filter((intId) => {
-          const interest = CULTURAL_INTERESTS.find((i) => i.id === intId);
-          return interest?.recommendedKeywords.some((kw) => haystack.includes(kw.toLowerCase()));
-        })
-        .map((intId) => CULTURAL_INTERESTS.find((i) => i.id === intId)?.name || "");
-
-      return {
-        ...dest,
-        score,
-        matchedInterests: matchedInterestNames,
-      };
+      return scoreB - scoreA;
     });
-
-    return list.sort((a, b) => b.score - a.score);
   }, [destinationPool, selectedInterests, regionFocus]);
 
-  // ==========================================
-  // 3. DYNAMIC ITINERARY BUILDER ALGORITHM
-  // ==========================================
-  const generateDynamicItinerary = useCallback(
-    (
-      currentDuration: number,
-      currentPace: "relaxed" | "standard" | "intensive",
-      currentPool: typeof scoredDestinations
-    ): ItineraryDay[] => {
-      if (!currentPool || currentPool.length === 0) return [];
-
-      const paceConfig = PACE_OPTIONS.find((p) => p.id === currentPace) || PACE_OPTIONS[1];
-      const stopsCountPerDay = paceConfig.stopsPerDay;
-
-      const timeSlotTemplates = [
-        { slot: "08:30 – 11:00", period: "Pagi" as const },
-        { slot: "11:30 – 14:00", period: "Siang" as const },
-        { slot: "14:30 – 17:00", period: "Sore" as const },
-        { slot: "18:00 – 20:30", period: "Malam" as const },
-      ];
-
-      const days: ItineraryDay[] = [];
-      let poolPointer = 0;
-
-      for (let day = 1; day <= currentDuration; day++) {
-        const dayStops: ItineraryStop[] = [];
-
-        for (let s = 0; s < stopsCountPerDay; s++) {
-          const dest = currentPool[poolPointer % currentPool.length];
-          poolPointer++;
-
-          // Extract available activities from destination
-          const availableActs = (dest.activities && dest.activities.length > 0)
-            ? dest.activities.map((a, aIdx) => ({
-                id: a.id || `${dest.id}-act-${aIdx}`,
-                title: a.name || `Aktivitas di ${dest.name}`,
-                description: a.description || dest.description,
-                durationMinutes: a.durationMinutes || 90,
-                priceAmount: a.price || 20000,
-                priceFormatted: a.price ? `Rp ${a.price.toLocaleString("id-ID")}` : "Donasi Adat Sukarela",
-              }))
-            : [
-                {
-                  id: `${dest.id}-default-1`,
-                  title: `Tur Edukasi Warisan di ${dest.name}`,
-                  description: dest.description,
-                  durationMinutes: 90,
-                  priceAmount: dest.ticketPrice || 15000,
-                  priceFormatted: dest.entryFee || "Rp 15.000 / orang",
-                },
-                {
-                  id: `${dest.id}-default-2`,
-                  title: `Dialog Budaya & Dokumentasi Tradisi`,
-                  description: `Berinteraksi dengan pemandu lokal tentang filosofi ${dest.name}`,
-                  durationMinutes: 60,
-                  priceAmount: 20000,
-                  priceFormatted: "Rp 20.000 / sesi",
-                },
-              ];
-
-          const primaryActivity = availableActs[s % availableActs.length];
-          const timeSlot = timeSlotTemplates[s % timeSlotTemplates.length];
-
-          let etiquette = "Kenakan pakaian yang sopan dan sapa tetua setempat dengan 'Horas!'";
-          if (dest.category.toLowerCase().includes("village") || dest.category.toLowerCase().includes("tradisional")) {
-            etiquette = "Minta izin sebelum memasuki pekarangan Rumah Bolon dan kenakan selendang ulos jika disediakan.";
-          } else if (dest.category.toLowerCase().includes("heritage") || dest.category.toLowerCase().includes("historical")) {
-            etiquette = "Dilarang memanjat atau merusak formasi batu cagar budaya megalitikum.";
-          } else if (dest.category.toLowerCase().includes("culinary")) {
-            etiquette = "Bagi yang memiliki sensitivitas rasa pedas/kebas, tanyakan kadar bumbu rempah andaliman.";
-          }
-
-          dayStops.push({
-            id: `stop-${day}-${s}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            stepNumber: s + 1,
-            timeSlot: timeSlot.slot,
-            timePeriod: timeSlot.period,
-            destinationName: dest.name,
-            destinationId: dest.id,
-            destinationSlug: dest.slug,
-            area: dest.area,
-            subRegion: dest.area.split(",")[0] || "Danau Toba",
-            activityTitle: primaryActivity.title,
-            activityDescription: primaryActivity.description,
-            culturalPillar: dest.matchedInterests[0] || dest.category,
-            durationMinutes: primaryActivity.durationMinutes,
-            durationText: `${primaryActivity.durationMinutes} Menit`,
-            estimatedCost: primaryActivity.priceFormatted,
-            costAmount: primaryActivity.priceAmount,
-            culturalEtiquette: etiquette,
-            transferNote: s < stopsCountPerDay - 1 ? "± 20–30 menit perjalanan darat" : undefined,
-            imageUrl: dest.imageUrl,
-            availableActivities: availableActs,
-          });
-        }
-
-        let dayTheme = `Hari ${day}: Penjelajahan Warisan & Interaksi Tradisi Batak`;
-        if (day === 1) dayTheme = `Hari 1: Peradaban Kuno, Arsitektur Huta & Napak Tilas Megalitik`;
-        if (day === 2) dayTheme = `Hari 2: Kriya Tenun Ulos, Simfoni Gondang & Kuliner Resep Leluhur`;
-        if (day === 3) dayTheme = `Hari 3: Lanskap Kaldera Vulkanik, Ziarah Spiritual & Puncak Geopark`;
-        if (day >= 4) dayTheme = `Hari ${day}: Pendalaman Budaya Komunitas & Lanskap Tepi Danau`;
-
-        days.push({
-          dayNumber: day,
-          themeTitle: dayTheme,
-          daySummary: `Rangkaian ${dayStops.length} persinggahan budaya terkurasi yang disesuaikan dengan minat personal Anda.`,
-          stops: dayStops,
-        });
-      }
-
-      return days;
-    },
-    []
-  );
-
-  // Regenerate itinerary whenever interests, duration, pace, or scored pool changes
-  useEffect(() => {
-    if (scoredDestinations.length > 0) {
-      const generated = generateDynamicItinerary(durationDays, travelPace, scoredDestinations);
-      setItineraryDays(generated);
-    }
-  }, [scoredDestinations, durationDays, travelPace, generateDynamicItinerary]);
-
-  // Update default journey title dynamically
-  useEffect(() => {
-    const interestNames = selectedInterests
-      .map((id) => CULTURAL_INTERESTS.find((i) => i.id === id)?.name)
-      .filter(Boolean);
-    const primaryInterest = interestNames[0] || "Warisan Batak";
-    const regionName = regionFocus === "Semua" ? "Danau Toba" : regionFocus;
-    setCustomJourneyTitle(`Jelajah ${primaryInterest} & Budaya ${regionName} (${durationDays} Hari)`);
-  }, [selectedInterests, durationDays, regionFocus]);
-
-  // Toggle Interest Helper
+  // Toggle Interest Handler
   const toggleInterest = (id: string) => {
+    let next: string[];
     if (selectedInterests.includes(id)) {
       if (selectedInterests.length > 1) {
-        setSelectedInterests(selectedInterests.filter((item) => item !== id));
+        next = selectedInterests.filter((item) => item !== id);
+      } else {
+        next = selectedInterests;
       }
     } else {
-      setSelectedInterests([...selectedInterests, id]);
+      next = [...selectedInterests, id];
     }
+    setSelectedInterests(next);
+
+    // Regenerate itinerary immediately on interest change
+    const updated = buildItineraryArray(durationDays, travelPace, destinationPool, next, regionFocus);
+    setItineraryDays(updated);
+  };
+
+  // Change Duration Handler
+  const handleDurationChange = (days: number) => {
+    setDurationDays(days);
+    const updated = buildItineraryArray(days, travelPace, destinationPool, selectedInterests, regionFocus);
+    setItineraryDays(updated);
+  };
+
+  // Change Pace Handler
+  const handlePaceChange = (pace: "relaxed" | "standard" | "intensive") => {
+    setTravelPace(pace);
+    const updated = buildItineraryArray(durationDays, pace, destinationPool, selectedInterests, regionFocus);
+    setItineraryDays(updated);
+  };
+
+  // Change Region Handler
+  const handleRegionChange = (reg: string) => {
+    setRegionFocus(reg);
+    const updated = buildItineraryArray(durationDays, travelPace, destinationPool, selectedInterests, reg);
+    setItineraryDays(updated);
   };
 
   // ==========================================
-  // 4. DYNAMIC INTERACTIVE STOP MUTATIONS
+  // TIMELINE MANIPULATION (UP, DOWN, DELETE, ACTIVITY)
   // ==========================================
 
-  // Move Stop Up within a day
   const handleMoveStopUp = (dayIndex: number, stopIndex: number) => {
     if (stopIndex === 0) return;
     setItineraryDays((prev) => {
@@ -501,8 +562,6 @@ export default function DynamicPersonalizedJourneyPage() {
       const temp = stops[stopIndex];
       stops[stopIndex] = stops[stopIndex - 1];
       stops[stopIndex - 1] = temp;
-
-      // Re-index step numbers
       stops.forEach((s, idx) => {
         s.stepNumber = idx + 1;
       });
@@ -510,18 +569,14 @@ export default function DynamicPersonalizedJourneyPage() {
     });
   };
 
-  // Move Stop Down within a day
   const handleMoveStopDown = (dayIndex: number, stopIndex: number) => {
     setItineraryDays((prev) => {
       const copy = JSON.parse(JSON.stringify(prev)) as ItineraryDay[];
       const stops = copy[dayIndex].stops;
       if (stopIndex >= stops.length - 1) return prev;
-
       const temp = stops[stopIndex];
       stops[stopIndex] = stops[stopIndex + 1];
       stops[stopIndex + 1] = temp;
-
-      // Re-index step numbers
       stops.forEach((s, idx) => {
         s.stepNumber = idx + 1;
       });
@@ -529,12 +584,10 @@ export default function DynamicPersonalizedJourneyPage() {
     });
   };
 
-  // Delete a stop from a day
   const handleDeleteStop = (dayIndex: number, stopIndex: number) => {
     setItineraryDays((prev) => {
       const copy = JSON.parse(JSON.stringify(prev)) as ItineraryDay[];
       copy[dayIndex].stops.splice(stopIndex, 1);
-      // Re-index step numbers
       copy[dayIndex].stops.forEach((s, idx) => {
         s.stepNumber = idx + 1;
       });
@@ -542,7 +595,6 @@ export default function DynamicPersonalizedJourneyPage() {
     });
   };
 
-  // Change activity of a stop
   const handleChangeStopActivity = (
     dayIndex: number,
     stopIndex: number,
@@ -564,7 +616,6 @@ export default function DynamicPersonalizedJourneyPage() {
     });
   };
 
-  // Add an extra stop to a specific day
   const handleAddStopToDay = (dayIndex: number, dest: UnifiedDestination) => {
     setItineraryDays((prev) => {
       const copy = JSON.parse(JSON.stringify(prev)) as ItineraryDay[];
@@ -610,7 +661,7 @@ export default function DynamicPersonalizedJourneyPage() {
         durationText: `${act.durationMinutes} Menit`,
         estimatedCost: act.priceFormatted,
         costAmount: act.priceAmount,
-        culturalEtiquette: "Jaga kebersihan lingkungan cagar budaya dan hormati kebiasaan warga lokal.",
+        culturalEtiquette: "Jaga kebersihan cagar budaya dan hormati kebiasaan warga lokal.",
         transferNote: "± 20 menit berkendara",
         imageUrl: dest.imageUrl,
         availableActivities: availableActs,
@@ -621,24 +672,35 @@ export default function DynamicPersonalizedJourneyPage() {
     setAddingStopToDayIndex(null);
   };
 
-  // Add an entire new day
-  const handleAddNewDay = () => {
-    const nextDayNum = durationDays + 1;
-    if (nextDayNum > 5) return;
-    setDurationDays(nextDayNum);
-  };
-
-  // Reset to auto recommendations
   const handleResetToAuto = () => {
-    const generated = generateDynamicItinerary(durationDays, travelPace, scoredDestinations);
-    setItineraryDays(generated);
-    setSaveSuccessNotice("Itinerary telah disetel ulang mengikuti algoritma rekomendasi terbaru!");
-    setTimeout(() => setSaveSuccessNotice(null), 3000);
+    const updated = buildItineraryArray(durationDays, travelPace, destinationPool, selectedInterests, regionFocus);
+    setItineraryDays(updated);
+    showToast("Itinerary telah disetel ulang mengikuti algoritma rekomendasi terbaru!");
   };
 
-  // ==========================================
-  // 5. DYNAMIC STATS & ESTIMATION BAR
-  // ==========================================
+  const handleResetToDefault = () => {
+    try {
+      localStorage.removeItem("bonatura_active_journey_draft");
+    } catch {
+      // ignore
+    }
+    const defInterests = ["ulos-tenun", "arsitektur-bolon", "megalitikum-sejarah"];
+    const defDays = 2;
+    const defRegion = "Semua";
+    const defPace: "standard" = "standard";
+    const defTitle = "Jelajah Kriya & Tenun Ulos Adat & Budaya Danau Toba (2 Hari)";
+    const defItinerary = buildItineraryArray(defDays, defPace, destinationPool, defInterests, defRegion);
+
+    setSelectedInterests(defInterests);
+    setDurationDays(defDays);
+    setRegionFocus(defRegion);
+    setTravelPace(defPace);
+    setCustomJourneyTitle(defTitle);
+    setItineraryDays(defItinerary);
+    showToast("Pilihan rencana perjalanan berhasil dikembalikan ke setelan awal.");
+  };
+
+  // Metrics calculation
   const totalStopsCount = useMemo(() => {
     return itineraryDays.reduce((acc, day) => acc + day.stops.length, 0);
   }, [itineraryDays]);
@@ -658,10 +720,285 @@ export default function DynamicPersonalizedJourneyPage() {
     return (totalMinutes / 60).toFixed(1);
   }, [itineraryDays]);
 
+  const showToast = (msg: string) => {
+    setFeedbackNotice(msg);
+    setTimeout(() => setFeedbackNotice(null), 4000);
+  };
+
   // ==========================================
-  // 6. SAVE, LOAD, SHARE & WHATSAPP
+  // CLIENT FALLBACK TEXT FORMATTER
   // ==========================================
-  const handleSaveJourney = () => {
+  const buildFormattedTextClient = useCallback((): string => {
+    const lines = [
+      `🏛️ *BONATURA — PERSONALIZED CULTURAL JOURNEY*`,
+      `📍 *${customJourneyTitle}*`,
+      `⏱️ *Durasi:* ${durationDays} Hari (${totalStopsCount} Titik Persinggahan Budaya)`,
+      `🗺️ *Fokus Wilayah:* ${regionFocus === "Semua" ? "Kawasan Danau Toba" : regionFocus}`,
+      `💰 *Estimasi Total Biaya:* Rp ${estimatedTotalCost.toLocaleString("id-ID")}`,
+      `────────────────────────────`,
+      ``,
+      ...itineraryDays.flatMap((day) => [
+        `📅 *${day.themeTitle}*`,
+        `_${day.daySummary}_`,
+        ``,
+        ...day.stops.flatMap((s) => [
+          `  ${s.stepNumber}. [${s.timeSlot}] *${s.destinationName}* (${s.area})`,
+          `     • *Aktivitas:* ${s.activityTitle}`,
+          `     • *Estimasi Tiket/Aktivitas:* ${s.estimatedCost}`,
+          `     • *Etika Adat:* ${s.culturalEtiquette}`,
+          ...(s.transferNote ? [`     ↳ _Perjalanan: ${s.transferNote}_`] : []),
+          ``,
+        ]),
+        `────────────────────────────`,
+        ``,
+      ]),
+      `🌿 *Prinsip Pelestarian Budaya:*`,
+      `Selalu hargai kearifan lokal masyarakat adat Batak, hormati situs megalitikum & makam leluhur, serta dukung perajin tenun & pemandu lokal.`,
+      ``,
+      `📲 Disusun secara cerdas melalui Platform Budaya *BONATURA*: ${typeof window !== "undefined" ? window.location.href : ""}`,
+    ];
+    return lines.join("\n");
+  }, [customJourneyTitle, durationDays, totalStopsCount, regionFocus, estimatedTotalCost, itineraryDays]);
+
+  // ==========================================
+  // FEATURE REQ 1: KIRIM KE WHATSAPP (WITH BACKEND)
+  // ==========================================
+  const handleSendToWhatsApp = async () => {
+    setIsActionLoading(true);
+    let finalWhatsAppUrl = "";
+    let finalFormattedText = "";
+
+    try {
+      // 1. Call Backend Export API
+      const backendRes = await exportJourneyViaBackend({
+        title: customJourneyTitle,
+        duration_days: durationDays,
+        selected_interests: selectedInterests,
+        region_focus: regionFocus,
+        pace: travelPace,
+        estimated_total_cost: estimatedTotalCost,
+        itinerary_days: itineraryDays.map((d) => ({
+          day_number: d.dayNumber,
+          theme_title: d.themeTitle,
+          day_summary: d.daySummary,
+          stops: d.stops.map((s) => ({
+            id: s.id,
+            step_number: s.stepNumber,
+            time_slot: s.timeSlot,
+            time_period: s.timePeriod,
+            destination_name: s.destinationName,
+            destination_id: s.destinationId,
+            area: s.area,
+            activity_title: s.activityTitle,
+            activity_description: s.activityDescription,
+            cultural_pillar: s.culturalPillar,
+            duration_minutes: s.durationMinutes,
+            duration_text: s.durationText,
+            estimated_cost: s.estimatedCost,
+            cost_amount: s.costAmount,
+            cultural_etiquette: s.culturalEtiquette,
+            transfer_note: s.transferNote || "",
+          })),
+        })),
+      });
+
+      if (backendRes.data && backendRes.data.whatsapp_url) {
+        finalWhatsAppUrl = backendRes.data.whatsapp_url;
+        finalFormattedText = backendRes.data.formatted_text;
+      }
+    } catch {
+      // ignore, fallback
+    }
+
+    // 2. Client Fallback if backend offline
+    if (!finalWhatsAppUrl) {
+      finalFormattedText = buildFormattedTextClient();
+      finalWhatsAppUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(finalFormattedText)}`;
+    }
+
+    // Also copy to clipboard for convenience
+    try {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(finalFormattedText);
+      }
+    } catch {
+      // ignore
+    }
+
+    // Open WhatsApp
+    window.open(finalWhatsAppUrl, "_blank");
+    showToast("Membuka WhatsApp dan menyalin pesan rencana perjalanan!");
+    setIsActionLoading(false);
+  };
+
+  // ==========================================
+  // FEATURE REQ 2: SALIN TEKS (WITH BACKEND)
+  // ==========================================
+  const handleCopyText = async () => {
+    setIsActionLoading(true);
+    let textToCopy = "";
+
+    try {
+      // Try backend first
+      const backendRes = await exportJourneyViaBackend({
+        title: customJourneyTitle,
+        duration_days: durationDays,
+        selected_interests: selectedInterests,
+        region_focus: regionFocus,
+        pace: travelPace,
+        estimated_total_cost: estimatedTotalCost,
+        itinerary_days: itineraryDays.map((d) => ({
+          day_number: d.dayNumber,
+          theme_title: d.themeTitle,
+          day_summary: d.daySummary,
+          stops: d.stops.map((s) => ({
+            id: s.id,
+            step_number: s.stepNumber,
+            time_slot: s.timeSlot,
+            time_period: s.timePeriod,
+            destination_name: s.destinationName,
+            destination_id: s.destinationId,
+            area: s.area,
+            activity_title: s.activityTitle,
+            activity_description: s.activityDescription,
+            cultural_pillar: s.culturalPillar,
+            duration_minutes: s.durationMinutes,
+            duration_text: s.durationText,
+            estimated_cost: s.estimatedCost,
+            cost_amount: s.costAmount,
+            cultural_etiquette: s.culturalEtiquette,
+            transfer_note: s.transferNote || "",
+          })),
+        })),
+      });
+
+      if (backendRes.data && backendRes.data.formatted_text) {
+        textToCopy = backendRes.data.formatted_text;
+      }
+    } catch {
+      // fallback
+    }
+
+    if (!textToCopy) {
+      textToCopy = buildFormattedTextClient();
+    }
+
+    // Copy to clipboard with fallback
+    let copySucceeded = false;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+        copySucceeded = true;
+      } catch {
+        copySucceeded = false;
+      }
+    }
+
+    if (!copySucceeded) {
+      // Fallback using textarea execCommand
+      try {
+        const textarea = document.createElement("textarea");
+        textarea.value = textToCopy;
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+        copySucceeded = true;
+      } catch {
+        copySucceeded = false;
+      }
+    }
+
+    setCopiedShareNotice(true);
+    setTimeout(() => setCopiedShareNotice(false), 3000);
+    showToast("Teks rencana perjalanan berhasil disalin ke clipboard!");
+    setIsActionLoading(false);
+  };
+
+  // ==========================================
+  // FEATURE REQ 3: CETAK / PDF & UNDUH DOKUMEN
+  // ==========================================
+  const handlePrintAndDownload = async () => {
+    setIsActionLoading(true);
+    let downloadContent = "";
+    let downloadFileName = `BONATURA-${customJourneyTitle.replace(/[^a-zA-Z0-9]/g, "-")}.txt`;
+
+    try {
+      // Call backend
+      const backendRes = await exportJourneyViaBackend({
+        title: customJourneyTitle,
+        duration_days: durationDays,
+        selected_interests: selectedInterests,
+        region_focus: regionFocus,
+        pace: travelPace,
+        estimated_total_cost: estimatedTotalCost,
+        itinerary_days: itineraryDays.map((d) => ({
+          day_number: d.dayNumber,
+          theme_title: d.themeTitle,
+          day_summary: d.daySummary,
+          stops: d.stops.map((s) => ({
+            id: s.id,
+            step_number: s.stepNumber,
+            time_slot: s.timeSlot,
+            time_period: s.timePeriod,
+            destination_name: s.destinationName,
+            destination_id: s.destinationId,
+            area: s.area,
+            activity_title: s.activityTitle,
+            activity_description: s.activityDescription,
+            cultural_pillar: s.culturalPillar,
+            duration_minutes: s.durationMinutes,
+            duration_text: s.durationText,
+            estimated_cost: s.estimatedCost,
+            cost_amount: s.costAmount,
+            cultural_etiquette: s.culturalEtiquette,
+            transfer_note: s.transferNote || "",
+          })),
+        })),
+      });
+
+      if (backendRes.data) {
+        downloadContent = backendRes.data.download_content;
+        downloadFileName = backendRes.data.download_file_name;
+      }
+    } catch {
+      // fallback
+    }
+
+    if (!downloadContent) {
+      downloadContent = buildFormattedTextClient();
+    }
+
+    // 1. Download file directly to user's computer
+    try {
+      const blob = new Blob([downloadContent], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = downloadFileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.warn("File download error:", err);
+    }
+
+    // 2. Open browser print dialog for Save as PDF / Print
+    showToast("Mengunduh dokumen rencana perjalanan & membuka dialog cetak/PDF!");
+    setTimeout(() => {
+      window.print();
+      setIsActionLoading(false);
+    }, 600);
+  };
+
+  // ==========================================
+  // SAVE JOURNEY (BACKEND + LOCALSTORAGE)
+  // ==========================================
+  const handleSaveJourney = async () => {
     const newJourney: SavedJourney = {
       id: "journey-" + Date.now(),
       title: customJourneyTitle.trim() || `Rencana Perjalanan ${durationDays} Hari`,
@@ -679,17 +1016,55 @@ export default function DynamicPersonalizedJourneyPage() {
       itineraryDays: JSON.parse(JSON.stringify(itineraryDays)),
     };
 
-    const updated = [newJourney, ...savedJourneys.filter((j) => j.title !== newJourney.title)];
-    setSavedJourneys(updated);
-
+    // 1. Save to Backend API
     try {
-      localStorage.setItem("bonatura_saved_journeys", JSON.stringify(updated));
-    } catch (e) {
-      console.warn("Failed to persist saved journeys in localStorage:", e);
+      await saveJourneyViaBackend({
+        id: newJourney.id,
+        title: newJourney.title,
+        duration_days: newJourney.durationDays,
+        selected_interests: newJourney.selectedInterests,
+        region_focus: newJourney.regionFocus,
+        pace: newJourney.pace,
+        stops_count: newJourney.stopsCount,
+        estimated_total_cost: newJourney.estimatedTotalCost,
+        itinerary_days: newJourney.itineraryDays.map((d) => ({
+          day_number: d.dayNumber,
+          theme_title: d.themeTitle,
+          day_summary: d.daySummary,
+          stops: d.stops.map((s) => ({
+            id: s.id,
+            step_number: s.stepNumber,
+            time_slot: s.timeSlot,
+            time_period: s.timePeriod,
+            destination_name: s.destinationName,
+            destination_id: s.destinationId,
+            area: s.area,
+            activity_title: s.activityTitle,
+            activity_description: s.activityDescription,
+            cultural_pillar: s.culturalPillar,
+            duration_minutes: s.durationMinutes,
+            duration_text: s.durationText,
+            estimated_cost: s.estimatedCost,
+            cost_amount: s.costAmount,
+            cultural_etiquette: s.culturalEtiquette,
+            transfer_note: s.transferNote || "",
+          })),
+        })),
+      });
+    } catch {
+      // fallback
     }
 
-    setSaveSuccessNotice(`Rencana perjalanan "${newJourney.title}" berhasil disimpan!`);
-    setTimeout(() => setSaveSuccessNotice(null), 4000);
+    // 2. Save to localStorage
+    const updated = [newJourney, ...savedJourneys.filter((j) => j.title !== newJourney.title)];
+    setSavedJourneys(updated);
+    try {
+      localStorage.setItem("bonatura_saved_journeys", JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+
+    showToast(`Rencana perjalanan "${newJourney.title}" berhasil disimpan!`);
   };
 
   const handleLoadSavedJourney = (saved: SavedJourney) => {
@@ -700,8 +1075,7 @@ export default function DynamicPersonalizedJourneyPage() {
     setCustomJourneyTitle(saved.title);
     setItineraryDays(JSON.parse(JSON.stringify(saved.itineraryDays)));
     setActiveTab("builder");
-    setSaveSuccessNotice(`Memuat rencana perjalanan: "${saved.title}"`);
-    setTimeout(() => setSaveSuccessNotice(null), 3000);
+    showToast(`Memuat rencana perjalanan: "${saved.title}"`);
   };
 
   const handleDeleteSavedJourney = (id: string, e: React.MouseEvent) => {
@@ -710,44 +1084,9 @@ export default function DynamicPersonalizedJourneyPage() {
     setSavedJourneys(updated);
     try {
       localStorage.setItem("bonatura_saved_journeys", JSON.stringify(updated));
-    } catch (err) {
-      console.warn(err);
+    } catch {
+      // ignore
     }
-  };
-
-  const buildSummaryText = () => {
-    const textLines = [
-      `🏛️ BONATURA — Personalized Cultural Journey`,
-      `📍 ${customJourneyTitle}`,
-      `⏱️ Durasi: ${durationDays} Hari (${totalStopsCount} Titik Persinggahan)`,
-      `💰 Estimasi Biaya Aktivitas: Rp ${estimatedTotalCost.toLocaleString("id-ID")}`,
-      `🏷️ Fokus: ${regionFocus === "Semua" ? "Kawasan Danau Toba" : regionFocus}`,
-      ``,
-      ...itineraryDays.flatMap((day) => [
-        `📅 ${day.themeTitle}`,
-        ...day.stops.map(
-          (s) => `  ${s.stepNumber}. [${s.timeSlot}] ${s.destinationName} (${s.area}) \n     • Aktivitas: ${s.activityTitle} (${s.estimatedCost})`
-        ),
-        ``,
-      ]),
-      `Rancangan ini disusun dengan Platform Kebudayaan BONATURA: ${typeof window !== "undefined" ? window.location.href : ""}`,
-    ];
-    return textLines.join("\n");
-  };
-
-  const handleShareClipboard = () => {
-    navigator.clipboard?.writeText(buildSummaryText());
-    setCopiedShareNotice(true);
-    setTimeout(() => setCopiedShareNotice(false), 3000);
-  };
-
-  const handleShareWhatsApp = () => {
-    const message = encodeURIComponent(buildSummaryText());
-    window.open(`https://api.whatsapp.com/send?text=${message}`, "_blank");
-  };
-
-  const handlePrint = () => {
-    window.print();
   };
 
   // ==========================================
@@ -756,10 +1095,10 @@ export default function DynamicPersonalizedJourneyPage() {
   return (
     <div className="min-h-screen bg-[#F8F5EF] text-[#3E2723] pb-24">
       {/* Toast Notification */}
-      {saveSuccessNotice && (
+      {feedbackNotice && (
         <div className="fixed bottom-6 right-6 z-50 bg-[#795548] text-[#F8F5EF] px-5 py-3.5 rounded-2xl shadow-xl flex items-center gap-3 border border-[#D6C4A8] animate-bounce">
           <CheckCircle2 className="w-5 h-5 text-[#D6C4A8]" />
-          <span className="text-xs sm:text-sm font-semibold">{saveSuccessNotice}</span>
+          <span className="text-xs sm:text-sm font-semibold">{feedbackNotice}</span>
         </div>
       )}
 
@@ -771,9 +1110,16 @@ export default function DynamicPersonalizedJourneyPage() {
               <Route className="w-3.5 h-3.5 text-[#B85C38]" />
               Fitur 5: Dynamic Cultural Journey
             </div>
-            {/* Live Backend Indicator */}
-            <div className="self-start md:self-auto">
-              <BackendStatusBadge onRefresh={fetchDestinationData} />
+            {/* Live Backend & Persistent Draft Indicator */}
+            <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+              <span
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-[#2C1A14] bg-[#D6C4A8]/50 border border-[#D6C4A8] rounded-xl shadow-xs"
+                title="Aktivitas dan preferensi yang Anda pilih disimpan otomatis dan tidak akan hilang saat membuka fitur lain"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
+                Pilihan Tersimpan Otomatis
+              </span>
+              <BackendStatusBadge onRefresh={fetchBackendData} />
             </div>
           </div>
 
@@ -783,7 +1129,7 @@ export default function DynamicPersonalizedJourneyPage() {
             </h1>
 
             <p className="mt-3 text-sm sm:text-base text-[#5D4333] leading-relaxed">
-              Atur preferensi minat budaya secara dinamis, pilih aktivitas spesifik, sesuaikan urutan waktu, dan simpan rencana perjalanan Anda di kawasan Danau Toba.
+              Atur preferensi minat budaya secara dinamis, pilih aktivitas spesifik, sesuaikan urutan waktu, dan bagikan rencana perjalanan ke WhatsApp, salin teks, atau unduh cetak/PDF.
             </p>
 
             {/* Navigation Tabs */}
@@ -1065,7 +1411,7 @@ export default function DynamicPersonalizedJourneyPage() {
                         {[1, 2, 3, 4].map((days) => (
                           <button
                             key={days}
-                            onClick={() => setDurationDays(days)}
+                            onClick={() => handleDurationChange(days)}
                             className={`py-2 px-2 text-xs font-bold rounded-xl border transition-all text-center ${
                               durationDays === days
                                 ? "bg-[#795548] text-[#F8F5EF] border-[#795548] shadow-sm"
@@ -1088,7 +1434,7 @@ export default function DynamicPersonalizedJourneyPage() {
                         {PACE_OPTIONS.map((pace) => (
                           <button
                             key={pace.id}
-                            onClick={() => setTravelPace(pace.id as any)}
+                            onClick={() => handlePaceChange(pace.id as any)}
                             className={`py-2 px-2 text-xs font-bold rounded-xl border transition-all text-center ${
                               travelPace === pace.id
                                 ? "bg-[#B85C38] text-[#F8F5EF] border-[#B85C38] shadow-sm"
@@ -1109,7 +1455,7 @@ export default function DynamicPersonalizedJourneyPage() {
                       </label>
                       <select
                         value={regionFocus}
-                        onChange={(e) => setRegionFocus(e.target.value)}
+                        onChange={(e) => handleRegionChange(e.target.value)}
                         className="w-full p-2.5 text-xs text-[#2C1A14] font-semibold bg-[#F8F5EF] border border-[#D6C4A8] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#B85C38]"
                       >
                         {REGION_OPTIONS.map((opt) => (
@@ -1196,73 +1542,98 @@ export default function DynamicPersonalizedJourneyPage() {
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#D6C4A8]/50">
                     <div>
                       <span className="text-[11px] font-bold uppercase tracking-wider text-[#B85C38] block">
-                        Aktivitas 3 & 4: Timeline Dinamis & Simpan
+                        Aktivitas 3 & 4: Timeline Dinamis & Berbagi
                       </span>
                       <h3 className="text-xl sm:text-2xl font-extrabold text-[#2C1A14] mt-0.5">
                         Urutan Perjalanan Interaktif
                       </h3>
                       <p className="text-xs text-[#5D4333] mt-1">
-                        Anda dapat menukar urutan waktu (⬆️/⬇️), mengganti aktivitas, atau menambah titik persinggahan baru.
+                        Pilih aktivitas spesifik, atur urutan waktu (⬆️/⬇️), simpan rencana, atau ekspor langsung.
                       </p>
                     </div>
 
-                    {/* Quick Reset to Auto Recommendation */}
+                    {/* Quick Reset Actions */}
+                    <div className="flex items-center gap-2 self-start sm:self-auto">
+                      <button
+                        onClick={handleResetToAuto}
+                        className="p-2 text-xs font-semibold rounded-xl border border-[#D6C4A8] bg-[#F8F5EF] hover:bg-[#D6C4A8]/30 text-[#3E2723] flex items-center gap-1.5 transition-colors"
+                        title="Setel Ulang Urutan ke Rekomendasi Otomatis"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5 text-[#795548]" />
+                        <span>Rekomendasi Ulang</span>
+                      </button>
+                      <button
+                        onClick={handleResetToDefault}
+                        className="p-2 text-xs font-semibold rounded-xl border border-[#D6C4A8] bg-[#F8F5EF] hover:bg-[#D6C4A8]/30 text-[#5D4333] hover:text-[#964728] transition-colors"
+                        title="Kembalikan Seluruh Pengaturan ke Setelan Awal Pabrik"
+                      >
+                        <span>Reset Default</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Title Form & Save Action */}
+                  <div className="bg-[#F8F5EF] p-3.5 rounded-2xl border border-[#D6C4A8] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex-1">
+                      <label className="block text-[11px] font-bold text-[#5D4333] uppercase tracking-wider mb-1">
+                        Nama Rencana Perjalanan:
+                      </label>
+                      <input
+                        type="text"
+                        value={customJourneyTitle}
+                        onChange={(e) => setCustomJourneyTitle(e.target.value)}
+                        placeholder="Beri nama perjalanan Anda..."
+                        className="w-full text-sm font-bold text-[#2C1A14] bg-transparent focus:outline-none placeholder-[#A8937D]"
+                      />
+                    </div>
                     <button
-                      onClick={handleResetToAuto}
-                      className="p-2 text-xs font-semibold rounded-xl border border-[#D6C4A8] bg-[#F8F5EF] hover:bg-[#D6C4A8]/30 text-[#3E2723] flex items-center gap-1.5 transition-colors self-start sm:self-auto"
-                      title="Setel Ulang ke Rekomendasi Otomatis"
+                      onClick={handleSaveJourney}
+                      className="px-4 py-2 text-xs font-bold text-[#F8F5EF] bg-[#795548] hover:bg-[#5D3B2E] rounded-xl transition-all shadow-md shadow-[#795548]/20 flex items-center justify-center gap-1.5 shrink-0"
                     >
-                      <RefreshCw className="w-3.5 h-3.5 text-[#795548]" />
-                      <span>Rekomendasi Ulang</span>
+                      <Bookmark className="w-4 h-4" />
+                      Simpan Rencana
                     </button>
                   </div>
 
-                  {/* Title Form & Action Buttons (Activity 4) */}
-                  <div className="space-y-3">
-                    <div className="bg-[#F8F5EF] p-3.5 rounded-2xl border border-[#D6C4A8] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="flex-1">
-                        <label className="block text-[11px] font-bold text-[#5D4333] uppercase tracking-wider mb-1">
-                          Nama Rencana Perjalanan:
-                        </label>
-                        <input
-                          type="text"
-                          value={customJourneyTitle}
-                          onChange={(e) => setCustomJourneyTitle(e.target.value)}
-                          placeholder="Beri nama perjalanan Anda..."
-                          className="w-full text-sm font-bold text-[#2C1A14] bg-transparent focus:outline-none placeholder-[#A8937D]"
-                        />
-                      </div>
+                  {/* ======================================================== */}
+                  {/* USER REQUESTED ACTION BUTTONS: WA, SALIN, CETAK/PDF      */}
+                  {/* ======================================================== */}
+                  <div className="pt-2">
+                    <span className="block text-[11px] font-bold text-[#5D4333] uppercase tracking-wider mb-2">
+                      Ekspor & Berbagi Rencana Perjalanan:
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                      {/* Button 1: Kirim ke WhatsApp */}
                       <button
-                        onClick={handleSaveJourney}
-                        className="px-4 py-2 text-xs font-bold text-[#F8F5EF] bg-[#B85C38] hover:bg-[#964728] rounded-xl transition-all shadow-md shadow-[#B85C38]/20 flex items-center justify-center gap-1.5 shrink-0"
+                        onClick={handleSendToWhatsApp}
+                        disabled={isActionLoading}
+                        className="py-2.5 px-3 rounded-xl border border-emerald-600 bg-emerald-600 hover:bg-emerald-700 text-[#F8F5EF] font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all"
+                        title="Kirim Isi Pesan Itinerary ke WhatsApp"
                       >
-                        <Bookmark className="w-4 h-4" />
-                        Simpan Rencana
+                        <MessageCircle className="w-4 h-4" />
+                        <span>Kirim ke WhatsApp</span>
                       </button>
-                    </div>
 
-                    {/* Sharing Action Strip */}
-                    <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
+                      {/* Button 2: Salin Teks */}
                       <button
-                        onClick={handleShareWhatsApp}
-                        className="py-2 px-3 rounded-xl border border-[#D6C4A8] bg-[#F8F5EF] hover:bg-emerald-50 text-emerald-800 font-semibold flex items-center gap-1.5 transition-colors"
+                        onClick={handleCopyText}
+                        disabled={isActionLoading}
+                        className="py-2.5 px-3 rounded-xl border border-[#D6C4A8] bg-white hover:bg-[#D6C4A8]/30 text-[#2C1A14] font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition-all"
+                        title="Salin Teks Lengkap ke Clipboard"
                       >
-                        <MessageCircle className="w-4 h-4 text-emerald-600" />
-                        Kirim ke WhatsApp
+                        <Copy className="w-4 h-4 text-[#B85C38]" />
+                        <span>{copiedShareNotice ? "Disalin!" : "Salin Teks"}</span>
                       </button>
+
+                      {/* Button 3: Cetak/PDF & Unduh */}
                       <button
-                        onClick={handleShareClipboard}
-                        className="py-2 px-3 rounded-xl border border-[#D6C4A8] bg-[#F8F5EF] hover:bg-[#D6C4A8]/30 text-[#3E2723] font-semibold flex items-center gap-1.5 transition-colors"
+                        onClick={handlePrintAndDownload}
+                        disabled={isActionLoading}
+                        className="py-2.5 px-3 rounded-xl border border-[#B85C38] bg-[#B85C38] hover:bg-[#964728] text-[#F8F5EF] font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all"
+                        title="Unduh File Dokumen & Buka Dialog Cetak/PDF"
                       >
-                        <Copy className="w-4 h-4 text-[#795548]" />
-                        {copiedShareNotice ? "Disalin!" : "Salin Teks"}
-                      </button>
-                      <button
-                        onClick={handlePrint}
-                        className="py-2 px-3 rounded-xl border border-[#D6C4A8] bg-[#F8F5EF] hover:bg-[#D6C4A8]/30 text-[#3E2723] font-semibold flex items-center gap-1.5 transition-colors"
-                      >
-                        <Printer className="w-4 h-4 text-[#795548]" />
-                        Cetak / PDF
+                        <Download className="w-4 h-4" />
+                        <span>Cetak / Unduh PDF</span>
                       </button>
                     </div>
                   </div>
@@ -1443,17 +1814,6 @@ export default function DynamicPersonalizedJourneyPage() {
                       </div>
                     </div>
                   ))}
-
-                  {/* Add Day Button */}
-                  {durationDays < 5 && (
-                    <button
-                      onClick={handleAddNewDay}
-                      className="w-full py-3.5 px-4 rounded-3xl border-2 border-dashed border-[#D6C4A8] hover:border-[#B85C38] text-xs font-bold text-[#795548] hover:text-[#B85C38] transition-all flex items-center justify-center gap-2 bg-white/60 hover:bg-white"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Tambah Hari Ke-{durationDays + 1} ke Rencana Perjalanan
-                    </button>
-                  )}
                 </div>
 
                 {/* Bottom Community Guide CTA */}
@@ -1485,7 +1845,7 @@ export default function DynamicPersonalizedJourneyPage() {
       {/* MODAL 1: ADD STOP TO DAY SELECTOR                              */}
       {/* ============================================================== */}
       {addingStopToDayIndex !== null && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
           <div className="bg-[#F8F5EF] max-w-lg w-full rounded-3xl border border-[#D6C4A8] shadow-2xl p-6 space-y-4 max-h-[85vh] flex flex-col">
             <div className="flex items-center justify-between pb-3 border-b border-[#D6C4A8]">
               <div>
@@ -1535,7 +1895,7 @@ export default function DynamicPersonalizedJourneyPage() {
       {/* MODAL 2: DESTINATION DETAIL PREVIEW                            */}
       {/* ============================================================== */}
       {selectedPreviewDest && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
           <div className="bg-[#F8F5EF] max-w-2xl w-full rounded-3xl border border-[#D6C4A8] shadow-2xl p-6 sm:p-7 space-y-5 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between pb-3 border-b border-[#D6C4A8]">
               <div>

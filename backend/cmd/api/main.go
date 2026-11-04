@@ -40,12 +40,14 @@ func main() {
 	destRepo := repository.NewDestinationRepository(db)
 	commRepo := repository.NewCommunityRepository(db)
 	subRepo := repository.NewSubmissionRepository(db)
+	journeyRepo := repository.NewJourneyRepository(db)
 
 	// 4. Initialize Services
 	cultureSvc := service.NewCultureService(cultureRepo)
 	destSvc := service.NewDestinationService(destRepo)
 	commSvc := service.NewCommunityService(commRepo)
 	subSvc := service.NewSubmissionService(subRepo)
+	journeySvc := service.NewJourneyService(journeyRepo)
 
 	// 5. Initialize Handlers
 	healthHandler := handler.NewHealthHandler(db)
@@ -53,6 +55,7 @@ func main() {
 	destHandler := handler.NewDestinationHandler(destSvc)
 	commHandler := handler.NewCommunityHandler(commSvc)
 	subHandler := handler.NewSubmissionHandler(subSvc)
+	journeyHandler := handler.NewJourneyHandler(journeySvc)
 
 	// 6. Router Setup
 	r := gin.New()
@@ -92,6 +95,14 @@ func main() {
 		{
 			commGroup.GET("", commHandler.GetCommunities)
 			commGroup.GET("/:slug", commHandler.GetCommunityBySlug)
+		}
+
+		journeyGroup := v1.Group("/journeys")
+		{
+			journeyGroup.POST("", journeyHandler.SaveJourney)
+			journeyGroup.GET("", journeyHandler.GetJourneys)
+			journeyGroup.GET("/:id", journeyHandler.GetJourneyByID)
+			journeyGroup.POST("/export", journeyHandler.ExportJourney)
 		}
 
 		// Authenticated Routes (Contributor & Admin)
