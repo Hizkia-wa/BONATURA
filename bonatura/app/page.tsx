@@ -13,12 +13,10 @@ import {
   Search,
   Sparkles,
   ChevronRight,
-  BookOpen,
-  Calendar,
-  Layers,
-  ArrowRight,
+  ArrowRight
 } from "lucide-react";
 import { CULTURAL_ELEMENTS } from "@/lib/data";
+import EntranceAnimation from "@/components/EntranceAnimation";
 
 export default function HomePage() {
   const router = useRouter();
@@ -28,7 +26,7 @@ export default function HomePage() {
     e.preventDefault();
     router.push("/discovery");
   };
-
+ 
   const featureCards = [
     {
       title: "Discovery: The Soul of Toba",
@@ -93,7 +91,9 @@ export default function HomePage() {
   ];
 
   return (
-    <div className="space-y-20 pb-20 bg-[#F8F5EF] text-[#3E2723]">
+    <>
+      <EntranceAnimation />
+      <div className="space-y-20 pb-20 bg-[#F8F5EF] text-[#3E2723]">
       {/* ============================================================== */}
       {/* 1. HERO SECTION                                                */}
       {/* ============================================================== */}
@@ -132,13 +132,13 @@ export default function HomePage() {
                 placeholder="Cari tari tradisional, senjata pusaka, kuliner, upacara adat..."
                 className="w-full px-4 py-3 text-sm text-[#3E2723] placeholder-[#A8937D] bg-transparent focus:outline-none"
               />
-              <Link
-                href="/discovery"
+              <button
+                type="submit"
                 className="px-5 py-3 text-xs font-bold text-[#F8F5EF] bg-[#B85C38] hover:bg-[#964728] rounded-xl transition-all shadow-md shadow-[#B85C38]/20 whitespace-nowrap flex items-center gap-1.5"
               >
                 Cari Budaya
                 <ChevronRight className="w-4 h-4" />
-              </Link>
+              </button>
             </form>
           </div>
 
@@ -335,6 +335,7 @@ export default function HomePage() {
           </div>
         </div>
       </section>
-    </div>
+      </div>
+    </>
   );
-}
+}  
