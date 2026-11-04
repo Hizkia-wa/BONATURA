@@ -202,10 +202,14 @@ export async function checkBackendHealth(): Promise<{
   service: string;
 }> {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1200);
     const res = await fetch(`${API_BASE_URL}/health`, {
       method: "GET",
+      signal: controller.signal,
       cache: "no-store",
     });
+    clearTimeout(timeoutId);
     if (!res.ok) throw new Error("Health check non-200");
     const json: ApiResponse<{
       service: string;

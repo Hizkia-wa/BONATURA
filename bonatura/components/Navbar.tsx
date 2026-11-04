@@ -13,7 +13,6 @@ import {
   ChevronRight,
   Menu,
   X,
-  Sparkles,
 } from "lucide-react";
 
 export default function Navbar() {
@@ -90,13 +89,6 @@ export default function Navbar() {
               <ShieldCheck className="w-4 h-4" />
               Admin Portal
             </Link>
-            <Link
-              href="/discovery"
-              className="px-4 py-2 text-xs font-semibold text-[#F8F5EF] bg-[#B85C38] hover:bg-[#964728] rounded-lg shadow-sm shadow-[#B85C38]/20 transition-all flex items-center gap-1.5"
-            >
-              Mulai Eksplorasi
-              <ChevronRight className="w-4 h-4" />
-            </Link>
           </div>
 
           {/* Mobile Menu Button */}
@@ -153,14 +145,6 @@ export default function Navbar() {
             >
               <ShieldCheck className="w-4 h-4" />
               Admin Portal
-            </Link>
-            <Link
-              href="/discovery"
-              onClick={() => setMobileMenuOpen(false)}
-              className="w-full py-2.5 px-4 text-xs font-bold text-[#F8F5EF] bg-[#B85C38] hover:bg-[#964728] rounded-xl text-center flex items-center justify-center gap-1.5"
-            >
-              <Sparkles className="w-4 h-4" />
-              Mulai Eksplorasi
             </Link>
           </div>
         </div>
