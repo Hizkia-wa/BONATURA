@@ -1,26 +1,81 @@
 @import "tailwindcss";
 
+@theme {
+  /* ======================================================== */
+  /* BONATURA PALETTE: #795548, #B85C38, #D6C4A8, #F8F5EF    */
+  /* ======================================================== */
+  --color-earth: #795548;        /* Earth Brown */
+  --color-terracotta: #B85C38;   /* Terracotta Accent */
+  --color-sand: #D6C4A8;         /* Beige / Sand */
+  --color-ivory: #F8F5EF;        /* Ivory Base */
+  
+  /* Dark text colors for high readability on beige (#D6C4A8) & ivory (#F8F5EF) */
+  --color-dark-brown: #3E2723;
+  --color-deep-brown: #2C1A14;
+  --color-neutral-dark: #32241D;
+  --color-muted-brown: #6D4C41;
+
+  /* Overriding amber to harmonize with Terracotta (#B85C38) and Earth (#795548) */
+  --color-amber-50: #FBF8F4;
+  --color-amber-100: #F3EAE0;
+  --color-amber-200: #E6DCcb;
+  --color-amber-300: #D6C4A8;    /* Beige / Sand */
+  --color-amber-400: #CF8059;
+  --color-amber-500: #C26842;
+  --color-amber-600: #B85C38;    /* Terracotta */
+  --color-amber-700: #B85C38;    /* Terracotta Primary */
+  --color-amber-800: #964728;
+  --color-amber-900: #795548;    /* Earth Brown */
+  --color-amber-950: #4E342E;
+
+  /* Overriding stone to Ivory (#F8F5EF), Beige (#D6C4A8), and rich dark browns */
+  --color-stone-50: #F8F5EF;     /* Ivory background */
+  --color-stone-100: #F1EAE0;    /* Soft beige ivory */
+  --color-stone-200: #E4D8C5;    /* Beige border */
+  --color-stone-300: #D6C4A8;    /* Beige / Sand */
+  --color-stone-400: #A8937D;    /* Muted sand */
+  --color-stone-500: #7D6451;    /* Muted brown */
+  --color-stone-600: #5D4333;    /* Medium dark brown */
+  --color-stone-700: #493326;    /* Dark brown */
+  --color-stone-800: #3E2723;    /* Dark brown text */
+  --color-stone-900: #2C1A14;    /* Deep brown text/headings */
+  --color-stone-950: #1D100C;    /* Near black brown */
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --background: #F8F5EF;
+  --foreground: #3E2723;
+  --color-primary: #B85C38;
+  --color-secondary: #795548;
+  --color-sand: #D6C4A8;
+  --color-ivory: #F8F5EF;
+  --color-dark-brown: #3E2723;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background-color: #F8F5EF;
+  color: #3E2723;
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Ensure high contrast selection */
+::selection {
+  background-color: #D6C4A8;
+  color: #2C1A14;
+}
+
+/* Scrollbar aesthetic with new palette */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #F8F5EF;
+}
+::-webkit-scrollbar-thumb {
+  background: #D6C4A8;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #B85C38;
 }

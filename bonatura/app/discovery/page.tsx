@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import {
   Compass,
@@ -50,6 +50,14 @@ import {
   TobaCulinaryItem,
   TobaHeritageKeeper,
 } from "@/lib/data";
+import {
+  getCulturalCategories,
+  getCulturalElements,
+  getCulturalElementDetail,
+  UnifiedCulturalElement,
+} from "@/lib/api";
+import BackendStatusBadge from "@/components/BackendStatusBadge";
+import { ExternalLink } from "lucide-react";
 
 export default function DiscoveryPage() {
   // --- SEARCH & HERO STATES ---
@@ -70,7 +78,60 @@ export default function DiscoveryPage() {
   const [activeGraphNodeId, setActiveGraphNodeId] = useState("ulos-batak-toba");
 
   // --- MODAL STATES ---
-  const [modalCulture, setModalCulture] = useState<CulturalElement | null>(null);
+  const [modalCulture, setModalCulture] = useState<any | null>(null);
+  const [backendCategories, setBackendCategories] = useState<{ id: string; name: string; slug: string }[]>([]);
+  const [liveElements, setLiveElements] = useState<UnifiedCulturalElement[]>([]);
+  const [isBackendConnected, setIsBackendConnected] = useState(false);
+
+  const loadBackendDiscovery = async () => {
+    try {
+      const [catRes, elemRes] = await Promise.all([
+        getCulturalCategories(),
+        getCulturalElements({
+          category: selectedCategory === "Semua" ? undefined : selectedCategory,
+          search: searchQuery || undefined,
+        }),
+      ]);
+      if (catRes.categories && catRes.categories.length > 0) {
+        setBackendCategories(catRes.categories);
+      }
+      if (elemRes.elements && elemRes.elements.length > 0) {
+        setLiveElements(elemRes.elements);
+        setIsBackendConnected(elemRes.isFromBackend);
+      }
+    } catch (err) {
+      console.warn("Backend discovery fetch:", err);
+    }
+  };
+
+  useEffect(() => {
+    loadBackendDiscovery();
+  }, [selectedCategory, searchQuery]);
+
+  const handleOpenCultureDetail = async (
+    item: any
+  ) => {
+    const fullMatch = CULTURAL_ELEMENTS.find(
+      (e) => e.id === item.id || e.slug === item.slug
+    );
+    if (fullMatch) {
+      setModalCulture(fullMatch);
+    } else {
+      setModalCulture(item);
+    }
+
+    try {
+      const slugOrId = item.slug || item.id;
+      if (slugOrId) {
+        const res = await getCulturalElementDetail(slugOrId);
+        if (res.element) {
+          setModalCulture(res.element);
+        }
+      }
+    } catch (e) {
+      console.warn("Error fetching element detail from backend:", e);
+    }
+  };
   const [modalGetToKnow, setModalGetToKnow] = useState<GetToKnowCard | null>(null);
   const [modalStory, setModalStory] = useState<TobaStory | null>(null);
   const [modalCulinary, setModalCulinary] = useState<TobaCulinaryItem | null>(null);
@@ -378,9 +439,13 @@ export default function DiscoveryPage() {
             <span className="text-xs font-bold uppercase tracking-wider text-amber-800 bg-amber-100 px-3 py-1 rounded-full">
               Core Cultural Discovery
             </span>
-            <h2 className="text-3xl sm:text-4xl font-extrabold text-stone-900 tracking-tight mt-3">
-              The Heritage That Lives in Toba.
-            </h2>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mt-3">
+              <h2 className="text-3xl sm:text-4xl font-extrabold text-stone-900 tracking-tight">
+                The Heritage That Lives in Toba.
+              </h2>
+              <BackendStatusBadge onRefresh={loadBackendDiscovery} />
+            </div>
+            
             <p className="mt-3 text-stone-600 text-sm sm:text-base leading-relaxed">
               Explore the traditions, art, architecture, and values that have shaped Batak Toba identity across generations.
             </p>
@@ -1368,46 +1433,100 @@ export default function DiscoveryPage() {
               </div>
 
               <div className="pt-2">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-stone-500 flex items-center gap-1.5 mb-2">
-                  <Info className="w-4 h-4" />
-                  Sumber Referensi & Kuratorial
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#795548] flex items-center gap-1.5 mb-2">
+                  <Info className="w-4 h-4 text-[#B85C38]" />
+                  Sumber Referensi & Kuratorial Resmi
                 </h4>
-                <ul className="space-y-1.5 text-xs text-stone-600 bg-stone-50 p-4 rounded-2xl border border-stone-200">
-                  {modalCulture.sources.map((src, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-700 mt-1.5 shrink-0" />
-                      <span>{src}</span>
-                    </li>
-                  ))}
+                <ul className="space-y-2 text-xs text-[#5D4333] bg-[#F8F5EF] p-4 rounded-2xl border border-[#D6C4A8]">
+                  {modalCulture.sources && modalCulture.sources.map((src: any, i: number) => {
+                    const isObj = typeof src === "object" && src !== null;
+                    const title = isObj ? src.title : src;
+                    const author = isObj ? src.author : undefined;
+                    const publisher = isObj ? src.publisher : undefined;
+                    const url = isObj ? src.url : undefined;
+                    const note = isObj ? src.note : undefined;
+                    return (
+                      <li key={i} className="flex flex-col gap-0.5 pb-2 border-b border-[#D6C4A8]/40 last:border-b-0 last:pb-0">
+                        <div className="flex items-start gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#B85C38] mt-1.5 shrink-0" />
+                          <span className="font-semibold text-[#2C1A14]">{title}</span>
+                        </div>
+                        {(author || publisher) && (
+                          <span className="text-[11px] text-[#795548] pl-3.5">
+                            {[author, publisher].filter(Boolean).join(" • ")}
+                          </span>
+                        )}
+                        {note && (
+                          <span className="text-[11px] text-[#5D4333] italic pl-3.5">Catatan: {note}</span>
+                        )}
+                        {url && (
+                          <a
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[11px] text-[#B85C38] hover:underline pl-3.5 flex items-center gap-1 mt-0.5"
+                          >
+                            <span>Buka Dokumen Rujukan Resmi</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
 
               {/* Related Elements */}
-              <div className="pt-4 border-t border-stone-200">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-stone-800 mb-3">
-                  Elemen Budaya Terkait
+              <div className="pt-4 border-t border-[#D6C4A8]">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#2C1A14] mb-3 flex items-center justify-between">
+                  <span>Rekomendasi Budaya Terkait (Knowledge Graph)</span>
+                  <span className="text-[11px] font-normal text-[#795548]">
+                    {modalCulture.relatedElements?.length || 0} Terhubung
+                  </span>
                 </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {modalCulture.relatedElements.map((rel) => (
+                  {modalCulture.relatedElements && modalCulture.relatedElements.map((rel: any) => (
                     <button
                       key={rel.id}
-                      onClick={() => {
-                        const next = CULTURAL_ELEMENTS.find((e) => e.id === rel.id);
-                        if (next) setModalCulture(next);
-                      }}
-                      className="p-3 bg-stone-50 hover:bg-amber-50 rounded-xl border border-stone-200 hover:border-amber-300 flex items-center justify-between text-left transition-colors group"
+                      onClick={() => handleOpenCultureDetail(rel)}
+                      className="p-3 bg-[#F8F5EF] hover:bg-[#D6C4A8]/30 rounded-xl border border-[#D6C4A8] hover:border-[#B85C38] flex items-center justify-between text-left transition-colors group"
                     >
                       <div>
-                        <span className="block text-xs font-bold text-stone-800 group-hover:text-amber-800">
+                        <span className="block text-xs font-bold text-[#2C1A14] group-hover:text-[#B85C38]">
                           {rel.name}
                         </span>
-                        <span className="text-[11px] text-stone-500">{rel.region}</span>
+                        <span className="text-[11px] text-[#795548]">{rel.relationType || rel.region || "Relasi Budaya"}</span>
                       </div>
-                      <ChevronRight className="w-4 h-4 text-stone-400 group-hover:text-amber-700" />
+                      <ChevronRight className="w-4 h-4 text-[#795548] group-hover:text-[#B85C38] group-hover:translate-x-0.5 transition-transform" />
                     </button>
                   ))}
                 </div>
               </div>
+
+              {/* Connected Destinations */}
+              {modalCulture.destinations && modalCulture.destinations.length > 0 && (
+                <div className="pt-4 border-t border-[#D6C4A8]">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-[#2C1A14] mb-3 flex items-center gap-1.5">
+                    <MapPin className="w-4 h-4 text-[#B85C38]" />
+                    Destinasi Terkait di Peta Budaya
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {modalCulture.destinations.map((dest: any) => (
+                      <Link
+                        key={dest.id}
+                        href="/map"
+                        className="p-3 bg-[#F8F5EF] hover:bg-[#D6C4A8]/30 rounded-xl border border-[#D6C4A8] hover:border-[#B85C38] flex items-center justify-between text-left transition-colors"
+                      >
+                        <div>
+                          <span className="block text-xs font-bold text-[#2C1A14]">{dest.name}</span>
+                          <span className="text-[11px] text-[#795548]">{dest.note || "Kunjungi di Peta Budaya"}</span>
+                        </div>
+                        <ExternalLink className="w-4 h-4 text-[#B85C38]" />
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="p-4 bg-stone-50 border-t border-stone-200 flex items-center justify-between">

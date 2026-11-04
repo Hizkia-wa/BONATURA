@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import {
   MapPin,
@@ -42,6 +42,12 @@ import {
   TobaDestinationDetail,
   TobaCulturalRoute,
 } from "@/lib/data";
+import {
+  getDestinations,
+  getDestinationDetail,
+  UnifiedDestination,
+} from "@/lib/api";
+import BackendStatusBadge from "@/components/BackendStatusBadge";
 
 export default function CulturalMapPage() {
   // --- STATES ---
@@ -53,7 +59,60 @@ export default function CulturalMapPage() {
     "tb-silalahi-center",
     "kampung-huta-raja",
   ]);
-  const [modalDestination, setModalDestination] = useState<TobaDestinationDetail | null>(null);
+  const [modalDestination, setModalDestination] = useState<any | null>(null);
+
+  // --- BACKEND API STATES ---
+  const [backendDestinations, setBackendDestinations] = useState<UnifiedDestination[]>([]);
+  const [activeDestDetail, setActiveDestDetail] = useState<UnifiedDestination | null>(null);
+  const [isBackendConnected, setIsBackendConnected] = useState(false);
+
+  const loadBackendDestinations = async () => {
+    try {
+      const res = await getDestinations({ search: searchQuery || undefined });
+      if (res.destinations && res.destinations.length > 0) {
+        setBackendDestinations(res.destinations);
+        setIsBackendConnected(res.isFromBackend);
+      }
+    } catch (e) {
+      console.warn("Failed loading backend destinations:", e);
+    }
+  };
+
+  useEffect(() => {
+    loadBackendDestinations();
+  }, [searchQuery]);
+
+  useEffect(() => {
+    async function loadDetail() {
+      try {
+        const res = await getDestinationDetail(selectedDestinationId);
+        if (res.destination) {
+          setActiveDestDetail(res.destination);
+        }
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+    loadDetail();
+  }, [selectedDestinationId]);
+
+  const handleOpenDestinationModal = async (dest: any) => {
+    setModalDestination(dest);
+    try {
+      const res = await getDestinationDetail(dest.slug || dest.id);
+      if (res && res.destination) {
+        const destObj = res.destination;
+        setModalDestination((prev: any) => ({
+          ...prev,
+          ...destObj,
+          culturalElements: destObj.culturalElements,
+          backendActivities: destObj.activities,
+        }));
+      }
+    } catch (e) {
+      console.warn("Failed fetching destination modal detail:", e);
+    }
+  };
 
   // Map Controls State
   const [zoomLevel, setZoomLevel] = useState<number>(1);
@@ -602,7 +661,7 @@ export default function CulturalMapPage() {
             {/* Actions */}
             <div className="pt-4 border-t border-stone-100 space-y-2">
               <button
-                onClick={() => setModalDestination(activeDestination)}
+                onClick={() => handleOpenDestinationModal(activeDestination)}
                 className="w-full py-3 bg-amber-800 hover:bg-amber-900 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-sm"
               >
                 <BookOpen className="w-4 h-4" />
@@ -706,7 +765,7 @@ export default function CulturalMapPage() {
                       View on Map
                     </button>
                     <button
-                      onClick={() => setModalDestination(dest)}
+                      onClick={() => handleOpenDestinationModal(dest)}
                       className="px-3.5 py-1.5 bg-amber-800 hover:bg-amber-900 text-white rounded-xl text-xs font-bold transition-colors shadow-xs"
                     >
                       Discover Story
@@ -782,7 +841,7 @@ export default function CulturalMapPage() {
                   Tandai di Peta
                 </button>
                 <button
-                  onClick={() => setModalDestination(gem)}
+                  onClick={() => handleOpenDestinationModal(gem)}
                   className="font-semibold text-stone-600 hover:text-stone-900"
                 >
                   Lihat Riwayat →
@@ -1059,7 +1118,7 @@ export default function CulturalMapPage() {
                   Aktivitas Pengalaman Budaya yang Tersedia:
                 </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {modalDestination.activities.map((act, i) => (
+                  {modalDestination.activities.map((act: any, i: number) => (
                     <div
                       key={i}
                       className="p-3 bg-stone-50 rounded-xl border border-stone-200 text-xs text-stone-700 flex items-center gap-2"
